@@ -1,0 +1,10 @@
+[package]
+name = "taskwarrior-rofi"
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+chrono = "0.4.19"
+machine = "0.3.0"
+rofi = "0.2.2"
+task-hookrs = "0.7.0"
