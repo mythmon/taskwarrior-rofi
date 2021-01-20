@@ -5,43 +5,61 @@ use rofi::Rofi;
 use task_hookrs::{status::TaskStatus, task::Task, tw};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let actions = Action::all();
-    let action = rich_rofi("Choose an action", actions)?;
+    loop {
+        let actions = Action::all();
+        let action = rich_rofi("Choose an action", actions)?;
 
-    match action {
-        Action::Add => {
-            let task_text = Rofi::<String>::new(&vec![])
-                .prompt("Task description")
-                .run()?;
-            let rv = Command::new("task")
-                .arg("add")
-                .arg(task_text)
-                .spawn()?
-                .wait_with_output()?;
-            if !rv.status.success() {
-                let stdout = String::from_utf8(rv.stdout)?;
-                let stderr = String::from_utf8(rv.stderr)?;
-                return Err(format!("{}\n{}", stdout, stderr).into());
+        match action {
+            Action::Add => {
+                let task_text = Rofi::<String>::new(&vec![])
+                    .prompt("Task description")
+                    .run()?;
+                let rv = Command::new("task")
+                    .arg("add")
+                    .arg(task_text)
+                    .spawn()?
+                    .wait_with_output()?;
+                if !rv.status.success() {
+                    let stdout = String::from_utf8(rv.stdout)?;
+                    let stderr = String::from_utf8(rv.stderr)?;
+                    return Err(format!("{}\n{}", stdout, stderr).into());
+                }
+                break;
             }
-        }
-        _ => {
-            let tasks = tw::query("status:pending").unwrap();
-            let labeled_tasks: Vec<_> = tasks
-                .into_iter()
-                .map(|task| LabeledItem {
-                    label: format_task(&task),
-                    item: task,
-                })
-                .collect();
-            let mut task: Task = rich_rofi("Choose a task", labeled_tasks)?;
-            match action {
-                Action::Done => *task.status_mut() = TaskStatus::Completed,
-                Action::Start => task.set_start(Some(LocalTime::now().naive_local())),
-                Action::Stop => task.set_start::<NaiveDateTime>(None),
-                Action::Delete => *task.status_mut() = TaskStatus::Deleted,
-                Action::Add => unreachable!("Already handled this case"),
+            Action::List => {
+                let tasks = tw::query("status:pending").unwrap();
+                let labeled_tasks: Vec<_> = tasks
+                    .into_iter()
+                    .map(|task| LabeledItem {
+                        label: format_task(&task),
+                        item: task,
+                    })
+                    .collect();
+                rich_rofi::<LabeledItem<Task>, Task>(
+                    "Press enter to go back to choosing an action",
+                    labeled_tasks,
+                )?;
             }
-            tw::save(Some(&task))?;
+            _ => {
+                let tasks = tw::query("status:pending").unwrap();
+                let labeled_tasks: Vec<_> = tasks
+                    .into_iter()
+                    .map(|task| LabeledItem {
+                        label: format_task(&task),
+                        item: task,
+                    })
+                    .collect();
+                let mut task: Task = rich_rofi("Choose a task", labeled_tasks)?;
+                match action {
+                    Action::Done => *task.status_mut() = TaskStatus::Completed,
+                    Action::Start => task.set_start(Some(LocalTime::now().naive_local())),
+                    Action::Stop => task.set_start::<NaiveDateTime>(None),
+                    Action::Delete => *task.status_mut() = TaskStatus::Deleted,
+                    Action::Add | Action::List => unreachable!("Already handled this case"),
+                }
+                tw::save(Some(&task))?;
+                break;
+            }
         }
     }
     Ok(())
@@ -49,15 +67,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 enum Action {
     Add,
+    Delete,
     Done,
+    List,
     Start,
     Stop,
-    Delete,
 }
 
 impl Action {
     fn all() -> Vec<Self> {
-        vec![Self::Add, Self::Done, Self::Start, Self::Stop, Self::Delete]
+        vec![
+            Self::List,
+            Self::Add,
+            Self::Done,
+            Self::Start,
+            Self::Stop,
+            Self::Delete,
+        ]
     }
 }
 
@@ -68,10 +94,11 @@ impl std::fmt::Display for Action {
             "{}",
             match self {
                 Action::Add => "Add",
+                Action::Delete => "Delete",
                 Action::Done => "Done",
+                Action::List => "List",
                 Action::Start => "Start",
                 Action::Stop => "Stop",
-                Action::Delete => "Delete",
             }
         )
     }
