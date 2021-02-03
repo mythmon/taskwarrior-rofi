@@ -14,11 +14,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let task_text = Rofi::<String>::new(&vec![])
                     .prompt("Task description")
                     .run()?;
-                let rv = Command::new("task")
-                    .arg("add")
-                    .arg(task_text)
-                    .spawn()?
-                    .wait_with_output()?;
+                let rv = {
+                    let mut command = Command::new("task");
+                    commandt.arg("add");
+                    for word in task_text.split_whitespace() {
+                        command.arg(word);
+                    }
+                    command
+                        .spawn()?
+                        .wait_with_output()?
+                };
                 if !rv.status.success() {
                     let stdout = String::from_utf8(rv.stdout)?;
                     let stderr = String::from_utf8(rv.stderr)?;
