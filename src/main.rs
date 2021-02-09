@@ -2,9 +2,15 @@ use std::{fmt::Display, process::Command};
 
 use chrono::{offset::Local as LocalTime, NaiveDateTime};
 use rofi::Rofi;
-use task_hookrs::{status::TaskStatus, task::Task, tw};
+use task_hookrs::{annotation::Annotation, status::TaskStatus, task::Task, tw};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() {
+    if let Result::Err(e) = ui() {
+        Rofi::new(&vec![format!("{}", e)]).run().expect("Should be able to show a rofi");
+    }
+}
+
+fn ui() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         let actions = Action::all();
         let action = rich_rofi("Choose an action", actions)?;
@@ -16,7 +22,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .run()?;
                 let rv = {
                     let mut command = Command::new("task");
-                    commandt.arg("add");
+                    command.arg("add");
                     for word in task_text.split_whitespace() {
                         command.arg(word);
                     }
@@ -60,6 +66,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Action::Start => task.set_start(Some(LocalTime::now().naive_local())),
                     Action::Stop => task.set_start::<NaiveDateTime>(None),
                     Action::Delete => *task.status_mut() = TaskStatus::Deleted,
+                    Action::Open => task.open_annotation()?,
                     Action::Add | Action::List => unreachable!("Already handled this case"),
                 }
                 tw::save(Some(&task))?;
@@ -77,6 +84,7 @@ enum Action {
     List,
     Start,
     Stop,
+    Open,
 }
 
 impl Action {
@@ -88,6 +96,7 @@ impl Action {
             Self::Start,
             Self::Stop,
             Self::Delete,
+            Self::Open,
         ]
     }
 }
@@ -104,6 +113,7 @@ impl std::fmt::Display for Action {
                 Action::List => "List",
                 Action::Start => "Start",
                 Action::Stop => "Stop",
+                Action::Open => "Open",
             }
         )
     }
@@ -149,4 +159,31 @@ where
     let idx = Rofi::new(&labels).prompt(prompt).run_index()?;
     // use `swap_remove` so we don't have to re-order the list we're about the throw away anyways
     Ok(items.swap_remove(idx).item)
+}
+
+trait TaskExt {
+    fn open_annotation(&self) -> Result<(), String>;
+}
+
+impl TaskExt for Task {
+    fn open_annotation(&self) -> Result<(), String> {
+        let annotations = self.annotations().ok_or("No annotations found")?;
+        let with_links: Vec<_> = annotations.into_iter()
+            .filter(|ann| ann.description().starts_with("https://") || ann.description().starts_with("http://"))
+            .collect();
+
+        let choice: &Annotation = match with_links.len() {
+            0 => return Err("No annotation links found".to_string()),
+            1 => with_links[0],
+            _ => {
+                return Err("Too many links found".to_string());
+                // TODO rofi to pick one
+            }
+        };
+
+        open::that(choice.description())
+        .map_err(|err| err.to_string())?;
+
+        Ok(())
+    }
 }
