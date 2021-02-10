@@ -67,7 +67,7 @@ fn ui() -> Result<(), Box<dyn std::error::Error>> {
 
 fn task_rofi(prompt: &str) -> Result<Task, rofi::Error> {
     let mut tasks = tw::query("status:pending").unwrap();
-    tasks.sort_unstable_by_key(|task| task.urgency().map(|u| (-u * 10_000f64) as u64));
+    tasks.sort_unstable_by_key(|task| task.urgency().map(|u| (-u * 10_000f64) as i32));
     let labeled_tasks: Vec<_> = tasks
         .into_iter()
         .map(|task| LabeledItem {
