@@ -6,7 +6,12 @@ use task_hookrs::{annotation::Annotation, status::TaskStatus, task::Task, tw};
 
 fn main() {
     if let Result::Err(e) = ui() {
-        Rofi::new(&vec![format!("{}", e)]).run().expect("Should be able to show a rofi");
+        match Rofi::new(&vec![format!("{}", e)]).run() {
+            Err(rofi::Error::IoError(err)) => {
+                println!("Error: {}", err);
+            }
+            Ok(_) | Err(_) => {}
+        }
     }
 }
 
@@ -26,9 +31,7 @@ fn ui() -> Result<(), Box<dyn std::error::Error>> {
                     for word in task_text.split_whitespace() {
                         command.arg(word);
                     }
-                    command
-                        .spawn()?
-                        .wait_with_output()?
+                    command.spawn()?.wait_with_output()?
                 };
                 if !rv.status.success() {
                     let stdout = String::from_utf8(rv.stdout)?;
@@ -38,29 +41,14 @@ fn ui() -> Result<(), Box<dyn std::error::Error>> {
                 break;
             }
             Action::List => {
-                let tasks = tw::query("status:pending").unwrap();
-                let labeled_tasks: Vec<_> = tasks
-                    .into_iter()
-                    .map(|task| LabeledItem {
-                        label: format_task(&task),
-                        item: task,
-                    })
-                    .collect();
-                rich_rofi::<LabeledItem<Task>, Task>(
-                    "Press enter to go back to choosing an action",
-                    labeled_tasks,
-                )?;
+                match task_rofi("Press enter to go back") {
+                    Ok(_) => Ok(()),
+                    Err(rofi::Error::Interrupted) => Ok(()),
+                    Err(e) => Err(e)
+                }?;
             }
             _ => {
-                let tasks = tw::query("status:pending").unwrap();
-                let labeled_tasks: Vec<_> = tasks
-                    .into_iter()
-                    .map(|task| LabeledItem {
-                        label: format_task(&task),
-                        item: task,
-                    })
-                    .collect();
-                let mut task: Task = rich_rofi("Choose a task", labeled_tasks)?;
+                let mut task = task_rofi("Choose a task")?;
                 match action {
                     Action::Done => *task.status_mut() = TaskStatus::Completed,
                     Action::Start => task.set_start(Some(LocalTime::now().naive_local())),
@@ -75,6 +63,19 @@ fn ui() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     Ok(())
+}
+
+fn task_rofi(prompt: &str) -> Result<Task, rofi::Error> {
+    let mut tasks = tw::query("status:pending").unwrap();
+    tasks.sort_unstable_by_key(|task| task.urgency().map(|u| (-u * 10_000f64) as u64));
+    let labeled_tasks: Vec<_> = tasks
+        .into_iter()
+        .map(|task| LabeledItem {
+            label: format_task(&task),
+            item: task,
+        })
+        .collect();
+    rich_rofi(prompt, labeled_tasks)
 }
 
 enum Action {
@@ -120,11 +121,31 @@ impl std::fmt::Display for Action {
 }
 
 fn format_task(task: &Task) -> String {
-    let id_str = match task.id() {
-        Some(n) => n.to_string(),
-        None => "-".to_string(),
-    };
-    format!("[{}] {}", id_str, task.description())
+    let mut parts = vec![];
+    let max_desc = 60;
+
+    if let Some(id) = task.id() {
+        parts.push(format!("[{:>2}]", id));
+    } else {
+        parts.push("[--]".to_string());
+    }
+
+    if task.description().len() <= max_desc {
+        parts.push(format!("{:<width$}", task.description(), width = max_desc));
+    } else {
+        let truncated = &task.description()[..max_desc - 3];
+        parts.push(format!("{}...", truncated));
+    }
+
+    if let Some(urgency) = task.urgency() {
+        parts.push(format!("(u={:+.2})", urgency));
+    }
+
+    if let Some(project) = task.project() {
+        parts.push(format!("proj:{}", project));
+    }
+
+    parts.join(" ")
 }
 
 struct LabeledItem<T> {
@@ -150,7 +171,7 @@ impl<T> Display for LabeledItem<T> {
     }
 }
 
-fn rich_rofi<T, U>(prompt: &str, items: Vec<T>) -> Result<U, Box<dyn std::error::Error>>
+fn rich_rofi<T, U>(prompt: &str, items: Vec<T>) -> Result<U, rofi::Error>
 where
     T: Into<LabeledItem<U>>,
 {
@@ -168,8 +189,12 @@ trait TaskExt {
 impl TaskExt for Task {
     fn open_annotation(&self) -> Result<(), String> {
         let annotations = self.annotations().ok_or("No annotations found")?;
-        let with_links: Vec<_> = annotations.into_iter()
-            .filter(|ann| ann.description().starts_with("https://") || ann.description().starts_with("http://"))
+        let with_links: Vec<_> = annotations
+            .iter()
+            .filter(|ann| {
+                ann.description().starts_with("https://")
+                    || ann.description().starts_with("http://")
+            })
             .collect();
 
         let choice: &Annotation = match with_links.len() {
@@ -181,8 +206,7 @@ impl TaskExt for Task {
             }
         };
 
-        open::that(choice.description())
-        .map_err(|err| err.to_string())?;
+        open::that(choice.description()).map_err(|err| err.to_string())?;
 
         Ok(())
     }
