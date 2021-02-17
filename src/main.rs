@@ -1,8 +1,13 @@
-use std::{fmt::Display, process::Command};
+use std::{
+    fmt::Display,
+    process::{Command, Stdio},
+};
 
 use chrono::{offset::Local as LocalTime, NaiveDateTime};
 use rofi::Rofi;
-use task_hookrs::{annotation::Annotation, status::TaskStatus, task::Task, tw};
+use task_hookrs::{
+    annotation::Annotation, date::Date as TwDate, status::TaskStatus, task::Task, tw,
+};
 
 fn main() {
     if let Result::Err(e) = ui() {
@@ -22,31 +27,33 @@ fn ui() -> Result<(), Box<dyn std::error::Error>> {
 
         match action {
             Action::Add => {
-                let task_text = Rofi::<String>::new(&vec![])
-                    .prompt("Task description")
-                    .run()?;
-                let rv = {
-                    let mut command = Command::new("task");
-                    command.arg("add");
-                    for word in task_text.split_whitespace() {
-                        command.arg(word);
-                    }
-                    command.spawn()?.wait_with_output()?
+                let (task_text, annotations) = {
+                    let input = Rofi::<String>::new(&vec![])
+                        .prompt("task -- annotation")
+                        .run()?;
+                    let mut parts = input.split("--");
+                    (
+                        parts
+                            .next()
+                            .ok_or_else(|| "No input given to add".to_string())?
+                            .to_string(),
+                        parts.map(|ann| ann.to_string()).collect::<Vec<_>>(),
+                    )
                 };
-                if !rv.status.success() {
-                    let stdout = String::from_utf8(rv.stdout)?;
-                    let stderr = String::from_utf8(rv.stderr)?;
-                    return Err(format!("{}\n{}", stdout, stderr).into());
-                }
+
+                add_task(task_text, annotations)?;
+
                 break;
             }
+
             Action::List => {
                 match task_rofi("Press enter to go back") {
                     Ok(_) => Ok(()),
                     Err(rofi::Error::Interrupted) => Ok(()),
-                    Err(e) => Err(e)
+                    Err(e) => Err(e),
                 }?;
             }
+
             _ => {
                 let mut task = task_rofi("Choose a task")?;
                 match action {
@@ -76,6 +83,59 @@ fn task_rofi(prompt: &str) -> Result<Task, rofi::Error> {
         })
         .collect();
     rich_rofi(prompt, labeled_tasks)
+}
+
+fn add_task(
+    task_text: String,
+    new_annotations: Vec<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let result = {
+        let mut command = Command::new("task");
+        command.stdout(Stdio::piped());
+        command.stderr(Stdio::piped());
+        command.arg("add");
+        for word in task_text.split_whitespace() {
+            command.arg(word);
+        }
+        command.spawn()?.wait_with_output()?
+    };
+    let stdout = String::from_utf8(result.stdout)?;
+    let stderr = String::from_utf8(result.stderr)?;
+    if !result.status.success() {
+        return Err(format!("stdout: {} / stderr: {}", stdout, stderr).into());
+    }
+    if !stdout.starts_with("Created task ") {
+        return Err(format!(
+            "Unexpected output from add command: `{}` / stderr: `{}`",
+            stdout, stderr
+        )
+        .into());
+    }
+    let task_id = stdout.split_whitespace().last().unwrap();
+
+    if !new_annotations.is_empty() {
+        let now: TwDate = LocalTime::now().naive_local().into();
+        let new_annotations = new_annotations
+            .iter()
+            .map(|ann| Annotation::new(now.clone(), ann.to_string()))
+            .collect::<Vec<_>>();
+
+        let mut tasks = tw::query(task_id)?;
+        if tasks.len() != 1 {
+            return Err("Querying by ID should return exactly one task".into());
+        }
+        let task = &mut tasks[0];
+
+        match task.annotations_mut() {
+            Some(annotations) => {
+                annotations.extend(new_annotations);
+            }
+            None => task.set_annotations::<Vec<_>, Annotation>(Some(new_annotations)),
+        };
+        tw::save(Some(&*task))?;
+    }
+
+    Ok(())
 }
 
 enum Action {
