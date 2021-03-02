@@ -37,7 +37,7 @@ fn ui() -> Result<(), Box<dyn std::error::Error>> {
                             .next()
                             .ok_or_else(|| "No input given to add".to_string())?
                             .to_string(),
-                        parts.map(|ann| ann.to_string()).collect::<Vec<_>>(),
+                        parts.map(|ann| ann.trim().to_string()).collect::<Vec<_>>(),
                     )
                 };
 
