@@ -261,8 +261,17 @@ impl TaskExt for Task {
             0 => return Err("No annotation links found".to_string()),
             1 => with_links[0],
             _ => {
-                return Err("Too many links found".to_string());
-                // TODO rofi to pick one
+                let mut labeled: Vec<_> = with_links
+                    .into_iter()
+                    .map(|ann| LabeledItem {
+                        label: format!("{} {}", ann.entry().format("%Y-%m-%d"), ann.description()),
+                        item: ann,
+                    })
+                    .collect();
+                labeled.sort_by(|a, b| a.label.cmp(&b.label).reverse());
+
+                rich_rofi("Choose annotation", labeled)
+                    .map_err(|err| format!("Couldn't choose task {:?}", err))?
             }
         };
 
