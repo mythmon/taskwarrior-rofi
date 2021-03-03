@@ -54,6 +54,11 @@ fn ui() -> Result<(), Box<dyn std::error::Error>> {
                 }?;
             }
 
+            Action::Mod => {
+                let mut task = task_rofi("Choose a task")?;
+                mod_task(&mut task)?
+            }
+
             _ => {
                 let mut task = task_rofi("Choose a task")?;
                 match action {
@@ -62,7 +67,9 @@ fn ui() -> Result<(), Box<dyn std::error::Error>> {
                     Action::Stop => task.set_start::<NaiveDateTime>(None),
                     Action::Delete => *task.status_mut() = TaskStatus::Deleted,
                     Action::Open => task.open_annotation()?,
-                    Action::Add | Action::List => unreachable!("Already handled this case"),
+                    Action::Mod | Action::Add | Action::List => {
+                        unreachable!("Already handled this case")
+                    }
                 }
                 tw::save(Some(&task))?;
                 break;
@@ -94,9 +101,7 @@ fn add_task(
         command.stdout(Stdio::piped());
         command.stderr(Stdio::piped());
         command.arg("add");
-        for word in task_text.split_whitespace() {
-            command.arg(word);
-        }
+        command.args(task_text.split_ascii_whitespace());
         command.spawn()?.wait_with_output()?
     };
     let stdout = String::from_utf8(result.stdout)?;
@@ -138,6 +143,32 @@ fn add_task(
     Ok(())
 }
 
+fn mod_task(task: &mut Task) -> Result<(), Box<dyn std::error::Error>> {
+    let task_id = task
+        .id()
+        .map(|id| id.to_string())
+        .unwrap_or_else(|| task.uuid().to_string());
+    let input = Rofi::<String>::new(&vec![])
+        .prompt(format!("Mods for task {}", task_id))
+        .run()?;
+    let result = Command::new("task")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .arg(&task_id)
+        .arg("mod")
+        .args(input.split_ascii_whitespace())
+        .spawn()?
+        .wait_with_output()?;
+
+    if !result.status.success() {
+        let stdout = String::from_utf8(result.stdout)?;
+        let stderr = String::from_utf8(result.stderr)?;
+        return Err(format!("stdout: {} / stderr: {}", stdout, stderr).into());
+    }
+
+    Ok(())
+}
+
 enum Action {
     Add,
     Delete,
@@ -146,6 +177,7 @@ enum Action {
     Start,
     Stop,
     Open,
+    Mod,
 }
 
 impl Action {
@@ -158,6 +190,7 @@ impl Action {
             Self::Stop,
             Self::Delete,
             Self::Open,
+            Self::Mod,
         ]
     }
 }
@@ -175,6 +208,7 @@ impl std::fmt::Display for Action {
                 Action::Start => "Start",
                 Action::Stop => "Stop",
                 Action::Open => "Open",
+                Action::Mod => "Mod",
             }
         )
     }
