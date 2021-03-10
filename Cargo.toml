@@ -8,6 +8,8 @@ chrono = "0.4.19"
 machine = "0.3.0"
 open = "1.5.0"
 rofi = "0.2.2"
+anyhow = "1.0.38"
+failure = "0.1.8"
 
 [dependencies.task-hookrs]
 git = "https://github.com/matthiasbeyer/task-hookrs.git"

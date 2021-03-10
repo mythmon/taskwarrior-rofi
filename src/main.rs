@@ -1,26 +1,29 @@
+use anyhow::{anyhow, bail, Context, Result};
+use chrono::{offset::Local as LocalTime, NaiveDateTime};
+use rofi::Rofi;
 use std::{
     fmt::Display,
     process::{Command, Stdio},
 };
-
-use chrono::{offset::Local as LocalTime, NaiveDateTime};
-use rofi::Rofi;
 use task_hookrs::{
     annotation::Annotation, date::Date as TwDate, status::TaskStatus, task::Task, tw,
 };
 
 fn main() {
-    if let Result::Err(e) = ui() {
-        match Rofi::new(&vec![format!("{}", e)]).run() {
-            Err(rofi::Error::IoError(err)) => {
-                println!("Error: {}", err);
+    match ui() {
+        Ok(_) => {}
+        Err(err) => match err.downcast_ref::<rofi::Error>() {
+            Some(rofi::Error::Interrupted) => (),
+            Some(_) | None => {
+                Rofi::new(&vec![format!("Error: {}", err)])
+                    .run()
+                    .expect("Couldn't even use rofi to show an error");
             }
-            Ok(_) | Err(_) => {}
-        }
+        },
     }
 }
 
-fn ui() -> Result<(), Box<dyn std::error::Error>> {
+fn ui() -> Result<()> {
     loop {
         let actions = Action::all();
         let action = rich_rofi("Choose an action", actions)?;
@@ -35,15 +38,13 @@ fn ui() -> Result<(), Box<dyn std::error::Error>> {
                     (
                         parts
                             .next()
-                            .ok_or_else(|| "No input given to add".to_string())?
+                            .ok_or_else(|| anyhow!("No input given to add"))?
                             .to_string(),
                         parts.map(|ann| ann.trim().to_string()).collect::<Vec<_>>(),
                     )
                 };
 
                 add_task(task_text, annotations)?;
-
-                break;
             }
 
             Action::List => {
@@ -59,6 +60,8 @@ fn ui() -> Result<(), Box<dyn std::error::Error>> {
                 mod_task(&mut task)?
             }
 
+            Action::Exit => return Ok(()),
+
             _ => {
                 let mut task = task_rofi("Choose a task")?;
                 match action {
@@ -67,16 +70,14 @@ fn ui() -> Result<(), Box<dyn std::error::Error>> {
                     Action::Stop => task.set_start::<NaiveDateTime>(None),
                     Action::Delete => *task.status_mut() = TaskStatus::Deleted,
                     Action::Open => task.open_annotation()?,
-                    Action::Mod | Action::Add | Action::List => {
+                    Action::Mod | Action::Add | Action::List | Action::Exit => {
                         unreachable!("Already handled this case")
                     }
                 }
-                tw::save(Some(&task))?;
-                break;
+                tw::save(Some(&task)).map_failure()?;
             }
         }
     }
-    Ok(())
 }
 
 fn task_rofi(prompt: &str) -> Result<Task, rofi::Error> {
@@ -92,10 +93,7 @@ fn task_rofi(prompt: &str) -> Result<Task, rofi::Error> {
     rich_rofi(prompt, labeled_tasks)
 }
 
-fn add_task(
-    task_text: String,
-    new_annotations: Vec<String>,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn add_task(task_text: String, new_annotations: Vec<String>) -> Result<()> {
     let result = {
         let mut command = Command::new("task");
         command.stdout(Stdio::piped());
@@ -107,14 +105,14 @@ fn add_task(
     let stdout = String::from_utf8(result.stdout)?;
     let stderr = String::from_utf8(result.stderr)?;
     if !result.status.success() {
-        return Err(format!("stdout: {} / stderr: {}", stdout, stderr).into());
+        bail!("Error adding task. stdout: {} / stderr: {}", stdout, stderr);
     }
     if !stdout.starts_with("Created task ") {
-        return Err(format!(
+        bail!(
             "Unexpected output from add command: `{}` / stderr: `{}`",
-            stdout, stderr
-        )
-        .into());
+            stdout,
+            stderr
+        );
     }
     let task_id = stdout.split_whitespace().last().unwrap();
 
@@ -125,9 +123,9 @@ fn add_task(
             .map(|ann| Annotation::new(now.clone(), ann.to_string()))
             .collect::<Vec<_>>();
 
-        let mut tasks = tw::query(task_id)?;
+        let mut tasks = tw::query(task_id).map_failure()?;
         if tasks.len() != 1 {
-            return Err("Querying by ID should return exactly one task".into());
+            bail!("Querying by ID should return exactly one task");
         }
         let task = &mut tasks[0];
 
@@ -137,13 +135,15 @@ fn add_task(
             }
             None => task.set_annotations::<Vec<_>, Annotation>(Some(new_annotations)),
         };
-        tw::save(Some(&*task))?;
+        tw::save(Some(&*task))
+            .map_err(|err| anyhow!("tw error: {}", err))
+            .context("Failed to save annotations")?;
     }
 
     Ok(())
 }
 
-fn mod_task(task: &mut Task) -> Result<(), Box<dyn std::error::Error>> {
+fn mod_task(task: &mut Task) -> Result<()> {
     let task_id = task
         .id()
         .map(|id| id.to_string())
@@ -163,7 +163,7 @@ fn mod_task(task: &mut Task) -> Result<(), Box<dyn std::error::Error>> {
     if !result.status.success() {
         let stdout = String::from_utf8(result.stdout)?;
         let stderr = String::from_utf8(result.stderr)?;
-        return Err(format!("stdout: {} / stderr: {}", stdout, stderr).into());
+        bail!("stdout: {} / stderr: {}", stdout, stderr);
     }
 
     Ok(())
@@ -178,6 +178,7 @@ enum Action {
     Stop,
     Open,
     Mod,
+    Exit,
 }
 
 impl Action {
@@ -191,6 +192,7 @@ impl Action {
             Self::Delete,
             Self::Open,
             Self::Mod,
+            Self::Exit,
         ]
     }
 }
@@ -209,6 +211,7 @@ impl std::fmt::Display for Action {
                 Action::Stop => "Stop",
                 Action::Open => "Open",
                 Action::Mod => "Mod",
+                Action::Exit => "Exit (Escape)",
             }
         )
     }
@@ -277,12 +280,14 @@ where
 }
 
 trait TaskExt {
-    fn open_annotation(&self) -> Result<(), String>;
+    fn open_annotation(&self) -> Result<()>;
 }
 
 impl TaskExt for Task {
-    fn open_annotation(&self) -> Result<(), String> {
-        let annotations = self.annotations().ok_or("No annotations found")?;
+    fn open_annotation(&self) -> Result<()> {
+        let annotations = self
+            .annotations()
+            .ok_or_else(|| anyhow!("No annotations found"))?;
         let with_links: Vec<_> = annotations
             .iter()
             .filter(|ann| {
@@ -292,7 +297,7 @@ impl TaskExt for Task {
             .collect();
 
         let choice: &Annotation = match with_links.len() {
-            0 => return Err("No annotation links found".to_string()),
+            0 => bail!("No annotation links found"),
             1 => with_links[0],
             _ => {
                 let mut labeled: Vec<_> = with_links
@@ -304,13 +309,26 @@ impl TaskExt for Task {
                     .collect();
                 labeled.sort_by(|a, b| a.label.cmp(&b.label).reverse());
 
-                rich_rofi("Choose annotation", labeled)
-                    .map_err(|err| format!("Couldn't choose task {:?}", err))?
+                rich_rofi("Choose annotation", labeled).context("Couldn't choose an annotation")?
             }
         };
 
-        open::that(choice.description()).map_err(|err| err.to_string())?;
+        open::that(choice.description()).context("Could not open item specified by annotation")?;
 
         Ok(())
+    }
+}
+
+trait MapFailure {
+    type MappedError;
+
+    fn map_failure(self) -> Self::MappedError;
+}
+
+impl<T> MapFailure for Result<T, failure::Error> {
+    type MappedError = Result<T, anyhow::Error>;
+
+    fn map_failure(self) -> Self::MappedError {
+        self.map_err(|err| anyhow!("tw error: {}", err))
     }
 }
