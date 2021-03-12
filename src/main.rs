@@ -69,7 +69,10 @@ fn ui() -> Result<()> {
                     Action::Start => task.set_start(Some(LocalTime::now().naive_local())),
                     Action::Stop => task.set_start::<NaiveDateTime>(None),
                     Action::Delete => *task.status_mut() = TaskStatus::Deleted,
-                    Action::Open => task.open_annotation()?,
+                    Action::Open => {
+                        task.open_annotation()?;
+                        break;
+                    }
                     Action::Mod | Action::Add | Action::List | Action::Exit => {
                         unreachable!("Already handled this case")
                     }
@@ -78,6 +81,7 @@ fn ui() -> Result<()> {
             }
         }
     }
+    Ok(())
 }
 
 fn task_rofi(prompt: &str) -> Result<Task, rofi::Error> {
