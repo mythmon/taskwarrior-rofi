@@ -73,6 +73,17 @@ fn ui() -> Result<()> {
                         task.open_annotation()?;
                         break;
                     }
+                    Action::Annotate => {
+                        let input = Rofi::<String>::new(&vec![]).prompt("annotation").run()?;
+                        let annotation =
+                            Annotation::new(LocalTime::now().naive_local().into(), input);
+                        match task.annotations_mut() {
+                            Some(annotations) => annotations.push(annotation),
+                            None => {
+                                task.set_annotations::<Vec<_>, Annotation>(Some(vec![annotation]))
+                            }
+                        }
+                    }
                     Action::Mod | Action::Add | Action::List | Action::Exit => {
                         unreachable!("Already handled this case")
                     }
@@ -182,6 +193,7 @@ enum Action {
     Stop,
     Open,
     Mod,
+    Annotate,
     Exit,
 }
 
@@ -196,6 +208,7 @@ impl Action {
             Self::Delete,
             Self::Open,
             Self::Mod,
+            Self::Annotate,
             Self::Exit,
         ]
     }
@@ -215,6 +228,7 @@ impl std::fmt::Display for Action {
                 Action::Stop => "Stop",
                 Action::Open => "Open",
                 Action::Mod => "Mod",
+                Action::Annotate => "Annotate",
                 Action::Exit => "Exit (Escape)",
             }
         )
