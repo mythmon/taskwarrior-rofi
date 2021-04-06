@@ -50,8 +50,10 @@ fn ui() -> Result<()> {
             Action::List => {
                 match task_rofi("Press enter to go back") {
                     Ok(_) => Ok(()),
-                    Err(rofi::Error::Interrupted) => Ok(()),
-                    Err(e) => Err(e),
+                    Err(e) => match e.downcast_ref::<rofi::Error>() {
+                        Some(rofi::Error::Interrupted) => Ok(()),
+                        _ => Err(e),
+                    },
                 }?;
             }
 
@@ -95,8 +97,10 @@ fn ui() -> Result<()> {
     Ok(())
 }
 
-fn task_rofi(prompt: &str) -> Result<Task, rofi::Error> {
-    let mut tasks = tw::query("status:pending").unwrap();
+fn task_rofi(prompt: &str) -> Result<Task> {
+    let default_command = get_config_var("default.command")?;
+    let default_filter = get_config_var(&format!("report.{}.filter", default_command))?;
+    let mut tasks = tw::query(&default_filter).unwrap();
     tasks.sort_unstable_by_key(|task| task.urgency().map(|u| (-u * 10_000f64) as i32));
     let labeled_tasks: Vec<_> = tasks
         .into_iter()
@@ -105,7 +109,29 @@ fn task_rofi(prompt: &str) -> Result<Task, rofi::Error> {
             item: task,
         })
         .collect();
-    rich_rofi(prompt, labeled_tasks)
+    Ok(rich_rofi(prompt, labeled_tasks)?)
+}
+
+fn get_config_var(name: &str) -> Result<String> {
+    let result = Command::new("task")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .args(vec!["show", name])
+        .spawn()?
+        .wait_with_output()?;
+    let output = String::from_utf8(result.stdout)?;
+    output
+        .lines()
+        .filter_map(|line| {
+            let parts: Vec<_> = line.split(' ').collect();
+            if parts.len() > 1 && parts[0] == name {
+                Some(parts[1..].join(" "))
+            } else {
+                None
+            }
+        })
+        .next()
+        .ok_or(anyhow!("Could not find default command"))
 }
 
 fn add_task(task_text: String, new_annotations: Vec<String>) -> Result<()> {
