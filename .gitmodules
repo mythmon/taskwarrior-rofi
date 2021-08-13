@@ -1,0 +1,3 @@
+[submodule "task-hookrs"]
+	path = task-hookrs
+	url = https://git.beyermatthi.as/task-hookrs

@@ -12,5 +12,4 @@ anyhow = "1.0.38"
 failure = "0.1.8"
 
 [dependencies.task-hookrs]
-git = "https://github.com/matthiasbeyer/task-hookrs.git"
-rev = "bc70cae87ee3b48c720cf446c7f70374b78692e7"
+path = "./task-hookrs"
