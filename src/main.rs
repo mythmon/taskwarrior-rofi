@@ -75,6 +75,7 @@ fn ui() -> Result<()> {
                         task.open_annotation()?;
                         break;
                     }
+
                     Action::Annotate => {
                         let input = Rofi::<String>::new(&vec![]).prompt("annotation").run()?;
                         let annotation =
@@ -86,6 +87,26 @@ fn ui() -> Result<()> {
                             }
                         }
                     }
+
+                    Action::Wait => {
+                        let input = Rofi::<String>::new(&vec![
+                            "tomorrow".to_string(),
+                            "1h".to_string(),
+                            "2h".to_string(),
+                            "4h".to_string(),
+                            "monday".to_string(),
+                        ])
+                        .prompt("Wait until?")
+                        .run()?;
+
+                        task_command(vec![
+                            &task.uuid().to_string(),
+                            "mod",
+                            &format!("wait:{}", input),
+                        ])
+                        .context("modifying wait")?;
+                    }
+
                     Action::Mod | Action::Add | Action::List | Action::Exit => {
                         unreachable!("Already handled this case")
                     }
@@ -113,14 +134,8 @@ fn task_rofi(prompt: &str) -> Result<Task> {
 }
 
 fn get_config_var(name: &str) -> Result<String> {
-    let result = Command::new("task")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .args(vec!["show", name])
-        .spawn()?
-        .wait_with_output()?;
-    let output = String::from_utf8(result.stdout)?;
-    output
+    task_command(vec!["show", name])?
+        .0
         .lines()
         .filter_map(|line| {
             let parts: Vec<_> = line.split(' ').collect();
@@ -131,23 +146,14 @@ fn get_config_var(name: &str) -> Result<String> {
             }
         })
         .next()
-        .ok_or(anyhow!("Could not find default command"))
+        .ok_or_else(|| anyhow!("Could not find default command"))
 }
 
 fn add_task(task_text: String, new_annotations: Vec<String>) -> Result<()> {
-    let result = {
-        let mut command = Command::new("task");
-        command.stdout(Stdio::piped());
-        command.stderr(Stdio::piped());
-        command.arg("add");
-        command.args(task_text.split_ascii_whitespace());
-        command.spawn()?.wait_with_output()?
-    };
-    let stdout = String::from_utf8(result.stdout)?;
-    let stderr = String::from_utf8(result.stderr)?;
-    if !result.status.success() {
-        bail!("Error adding task. stdout: {} / stderr: {}", stdout, stderr);
-    }
+    let mut args = vec!["add"];
+    args.extend(task_text.split_whitespace());
+    let (stdout, stderr) = task_command(args).context("adding task")?;
+
     if !stdout.starts_with("Created task ") {
         bail!(
             "Unexpected output from add command: `{}` / stderr: `{}`",
@@ -192,20 +198,10 @@ fn mod_task(task: &mut Task) -> Result<()> {
     let input = Rofi::<String>::new(&vec![])
         .prompt(format!("Mods for task {}", task_id))
         .run()?;
-    let result = Command::new("task")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .arg(&task_id)
-        .arg("mod")
-        .args(input.split_ascii_whitespace())
-        .spawn()?
-        .wait_with_output()?;
 
-    if !result.status.success() {
-        let stdout = String::from_utf8(result.stdout)?;
-        let stderr = String::from_utf8(result.stderr)?;
-        bail!("stdout: {} / stderr: {}", stdout, stderr);
-    }
+    let mut args: Vec<&str> = vec![&task_id, "mod"];
+    args.extend(input.split_whitespace());
+    task_command(args).context("modifying task")?;
 
     Ok(())
 }
@@ -219,6 +215,7 @@ enum Action {
     Stop,
     Open,
     Mod,
+    Wait,
     Annotate,
     Exit,
 }
@@ -234,6 +231,7 @@ impl Action {
             Self::Delete,
             Self::Open,
             Self::Mod,
+            Self::Wait,
             Self::Annotate,
             Self::Exit,
         ]
@@ -254,6 +252,7 @@ impl std::fmt::Display for Action {
                 Action::Stop => "Stop",
                 Action::Open => "Open",
                 Action::Mod => "Mod",
+                Action::Wait => "Wait",
                 Action::Annotate => "Annotate",
                 Action::Exit => "Exit (Escape)",
             }
@@ -375,4 +374,22 @@ impl<T> MapFailure for Result<T, failure::Error> {
     fn map_failure(self) -> Self::MappedError {
         self.map_err(|err| anyhow!("tw error: {}", err))
     }
+}
+
+fn task_command(args: Vec<&str>) -> Result<(String, String)> {
+    let result = Command::new("task")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .args(args)
+        .spawn()?
+        .wait_with_output()?;
+
+    let stdout = String::from_utf8(result.stdout)?;
+    let stderr = String::from_utf8(result.stderr)?;
+
+    if !result.status.success() {
+        bail!("stdout: {} / stderr: {}", stdout, stderr);
+    }
+
+    Ok((stdout, stderr))
 }
